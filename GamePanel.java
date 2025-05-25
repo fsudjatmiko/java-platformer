@@ -3,6 +3,9 @@ import java.awt.*;
 import java.awt.event.*;
 import java.util.ArrayList;
 import java.util.List;
+import java.awt.image.BufferedImage;
+import java.io.File;
+import javax.imageio.ImageIO;
 
 public class GamePanel extends JPanel implements ActionListener, KeyListener {
     private Timer timer;
@@ -40,12 +43,23 @@ public class GamePanel extends JPanel implements ActionListener, KeyListener {
     private int[] trailJumpY = new int[TRAIL_LENGTH]; // Store previous jumpY values for trail
     private java.util.LinkedList<Point> trail = new java.util.LinkedList<>();
 
+    private BufferedImage bgImage = null;
+    private int bgImageWidth = 0, bgImageHeight = 0;
+
     public GamePanel(Main mainFrame, int level, int highestUnlockedLevel) {
         this.mainFrame = mainFrame;
         this.level = level;
         this.highestUnlockedLevel = highestUnlockedLevel;
         setFocusable(true);
         addKeyListener(this);
+        // Load background image for this level if available
+        try {
+            String bgPath = "images/level" + level + ".png";
+            bgImage = ImageIO.read(new File(bgPath));
+            bgImageWidth = bgImage.getWidth();
+        } catch (Exception ex) {
+            bgImage = null;
+        }
         setupLevel();
         timer = new Timer(20, this);
         timer.start();
@@ -204,8 +218,17 @@ public class GamePanel extends JPanel implements ActionListener, KeyListener {
     @Override
     protected void paintComponent(Graphics g) {
         super.paintComponent(g);
-        g.setColor(Color.YELLOW); // Set background to yellow
-        g.fillRect(0, 0, getWidth(), getHeight());
+        if (bgImage != null) {
+            // Loop the background image horizontally
+            int y = 0;
+            int scrollX = cameraOffset % bgImageWidth;
+            for (int x = -scrollX; x < getWidth(); x += bgImageWidth) {
+                g.drawImage(bgImage, x, y, null);
+            }
+        } else {
+            g.setColor(Color.YELLOW); // Set background to yellow
+            g.fillRect(0, 0, getWidth(), getHeight());
+        }
         // Draw ground/terrain in front of obstacles, with holes
         g.setColor(new Color(200, 200, 200));
         int lastX = 0;
@@ -220,6 +243,9 @@ public class GamePanel extends JPanel implements ActionListener, KeyListener {
         if (lastX < getWidth()) {
             g.fillRect(lastX, 290, getWidth() - lastX, 30);
         }
+        // Draw a dark area under the platform to separate ground from sky
+        g.setColor(new Color(60, 60, 60)); // dark grey/blackish
+        g.fillRect(0, 320, getWidth(), getHeight() - 320);
         // Draw vertical lines on the platform to show movement
         g.setColor(new Color(180, 180, 180));
         int lineSpacing = 60;
@@ -288,10 +314,17 @@ public class GamePanel extends JPanel implements ActionListener, KeyListener {
             g.setFont(new Font("Arial", Font.BOLD, 32));
             g.setColor(levelCleared ? Color.GREEN : Color.RED);
             String msg = levelCleared ? "Level Cleared!" : "Level Failed";
-            g.drawString(msg, 270, 120);
+            double percent = requiredCollectibles == 0 ? 0 : (double)collectedCount / requiredCollectibles * 100.0;
+            String percentStr = String.format(" (%.0f%%)", percent);
+            g.drawString(msg + percentStr, 220, 120);
             g.setFont(new Font("Arial", Font.PLAIN, 20));
             g.setColor(Color.WHITE);
             g.drawString("Collected: " + collectedCount + "/" + requiredCollectibles, 320, 170);
+            if (!levelCleared && percent < 70.0) {
+                g.setColor(Color.ORANGE);
+                g.setFont(new Font("Arial", Font.BOLD, 16));
+                g.drawString("uh oh you collected less than the minimum (70%) of collectibles", 170, 200);
+            }
         }
     }
 
@@ -325,6 +358,7 @@ public class GamePanel extends JPanel implements ActionListener, KeyListener {
             }
         }
         // Obstacle collision (thinner hitbox, variable size)
+        boolean hitThisFrame = false;
         for (Obstacle obs : obstacles) {
             int screenX = obs.x - cameraOffset;
             int hitboxX = screenX + obs.w / 3;
@@ -336,16 +370,25 @@ public class GamePanel extends JPanel implements ActionListener, KeyListener {
                     blink = true;
                     blinkTicks = BLINK_DURATION;
                 }
-                if (health <= 0) {
-                    health = 0;
-                    showEndUI = true;
-                    levelCleared = false;
-                    showEndButtons();
-                    repaint();
-                    timer.stop();
-                    return;
-                }
+                hitThisFrame = true;
             }
+        }
+        // Handle blink duration
+        if (blink) {
+            blinkTicks--;
+            if (blinkTicks <= 0) {
+                blink = false;
+            }
+        }
+        // Check for player death
+        if (health <= 0) {
+            health = 0;
+            showEndUI = true;
+            levelCleared = false;
+            showEndButtons();
+            repaint();
+            timer.stop();
+            return;
         }
         // Check for falling into a hole
         int playerFeetX = playerX;
@@ -362,11 +405,10 @@ public class GamePanel extends JPanel implements ActionListener, KeyListener {
         }
         if (inHole && jumpY == 0) { // Only if on the ground
             timer.stop();
-            // JOptionPane.showMessageDialog(this, "You fell into a hole! Level will reset.", "Hole!", JOptionPane.WARNING_MESSAGE);
-            collectedCount = 0;
-            health = startHealth;
-            setupLevel();
-            timer.start();
+            showEndUI = true;
+            levelCleared = false;
+            showEndButtons();
+            repaint();
             return;
         }
         // Check for finish line
